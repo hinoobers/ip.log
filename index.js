@@ -1,5 +1,6 @@
 const express = require('express');
 const app = express();
+const fs = require('fs');
 
 const sqlDatabase = require("./util/mysql");
 const redisClient = require("./util/redis");
@@ -22,7 +23,24 @@ const startup = async () => {
         return;
     }
 
-    
+    const response = await fetch('https://onionoo.torproject.org/summary?type=relay&running=true&fields=or_addresses');
+    const data = await response.json();
+    const torNodes = data.relays
+    .map((relay) => relay.a) 
+    .flat()
+    .map((addr) => {
+        if (addr.startsWith("[") && addr.includes("]")) {
+            return addr.slice(1, addr.indexOf("]"));
+        }
+        return addr.split(":")[0];
+    });
+
+    // Salvesta andmebaasi
+    for(const node of torNodes) {
+        console.log(node);
+        await sqlDatabase.query("UPDATE ips SET is_tor = TRUE WHERE ip = INET6_ATON(?)", [node]);
+    }
+    console.log("Tor nodes updated in database.");
 };
 startup();
 
@@ -37,7 +55,6 @@ app.get("/checkip", async (req, res) => {
         return res.status(400).json({error: "IP must be a string"});
     }
 
-    console.log("awa");
 
     const ipv4 = ip.match(/^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/);
     const ipv6 = ip.match(/^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(::([0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4})|([0-9a-fA-F]{1,4}::([0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}))$/);
