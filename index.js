@@ -10,13 +10,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('frontend'));
 
+const ratelimit = [];
+
 const startup = async () => {
     try {
         await sqlDatabase.query("SELECT 1 + 1 AS solution");
 
         // Automaatne tabeli loomine
         await sqlDatabase.query("CREATE TABLE IF NOT EXISTS ips (id INT AUTO_INCREMENT PRIMARY KEY, ip VARBINARY(16) NOT NULL, is_tor BOOLEAN DEFAULT FALSE, is_host BOOLEAN DEFAULT FALSE, asn INT DEFAULT NULL, isp VARCHAR(255) DEFAULT NULL, country_code CHAR(2) DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-        await sqlDatabase.query("CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        await sqlDatabase.query("CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL, password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         await sqlDatabase.query("CREATE TABLE IF NOT EXISTS api_keys (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, api_key VARCHAR(64) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id))");
 
         console.log("SQL database connection established!");
@@ -25,7 +27,6 @@ const startup = async () => {
         // Shut down
         console.error("Database connection failed:", err);
         process.exit(1);
-        return;
     }
 
     const response = await fetch('https://onionoo.torproject.org/summary?type=relay&running=true&fields=or_addresses');
@@ -40,11 +41,20 @@ const startup = async () => {
         return addr.split(":")[0];
     });
 
-    // Salvesta andmebaasi
-    // for(const node of torNodes) {
-    //     await sqlDatabase.query("UPDATE ips SET is_tor = TRUE WHERE ip = INET6_ATON(?)", [node]);
-    // }
-    console.log("Tor nodes updated in database.");
+    await sqlDatabase.query("CREATE TEMPORARY TABLE tor_ips (ip VARBINARY(16) PRIMARY KEY)");
+
+    const values = torNodes.map(ip => [ip]);
+    await sqlDatabase.query(
+        "INSERT IGNORE INTO tor_ips (ip) VALUES " +
+        values.map(() => "(INET6_ATON(?))").join(","),
+        torNodes
+    );
+
+    await sqlDatabase.query(`
+        UPDATE ips
+        JOIN tor_ips ON ips.ip = tor_ips.ip
+        SET ips.is_tor = TRUE
+    `);
 };
 startup();
 
@@ -56,7 +66,12 @@ app.get("/checkip", async (req, res) => {
             return res.status(403).json({error: "Invalid API key"});
         }
     } else {
-        return res.status(401).json({error: "API key required"});
+        // Luba, aga piiratud ainult isiklikuks kasutamiseks
+        // TODO: Rate limiit
+        const userAgent = req.headers['user-agent'].toLowerCase() || '';
+        if(userAgent.length < 15 || userAgent.includes("curl") || userAgent.includes("postmanruntime") || userAgent.includes("python-requests") || userAgent.includes("java") || userAgent.includes("go-http-client") || userAgent.includes("crawler") || userAgent.includes("spider") || userAgent.includes("bot")) {
+            return res.status(403).json({error: "Forbidden"});
+        }
     }
 
     const ip = req.query.ip;
@@ -138,7 +153,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 app.post("/createapikey", authenticateToken, async (req, res) => {
-    const apiKey = require('crypto').randomBytes(32).toString('hex');
+    const apiKey = require('crypto').randomBytes(16).toString('hex');
     const userId = req.user.userId;
     await sqlDatabase.query("INSERT INTO api_keys (user_id, api_key) VALUES (?, ?)", [userId, apiKey]);
     return res.json({apiKey});
