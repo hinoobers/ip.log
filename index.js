@@ -6,15 +6,22 @@ const redisClient = require("./util/redis");
 
 app.use(express.json());
 
-app.get("/", async (req, res) => {
-    // Andmebaasi test
+const test = async () => {
     try {
-        const [rows, fields] = await sqlDatabase.query("SELECT 1 + 1 AS solution");
-        res.send(`The solution is: ${rows[0].solution}`);
+        await sqlDatabase.query("SELECT 1 + 1 AS solution");
+
+        // Automaatne tabeli loomine
+        await sqlDatabase.query("CREATE TABLE IF NOT EXISTS ips (id INT AUTO_INCREMENT PRIMARY KEY, ip VARBINARY(16) NOT NULL, is_tor BOOLEAN DEFAULT FALSE, is_host BOOLEAN DEFAULT FALSE, asn INT DEFAULT NULL, isp VARCHAR(255) DEFAULT NULL, country_code CHAR(2) DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        
+        console.log("SQL database connection established!");
+
     } catch (err) {
-        res.status(500).send(err.message);
+        // Shut down
+        console.error("Database connection failed:", err);
+        process.exit(1);
     }
-});
+};
+test();
 
 app.get("/checkip", (req, res) => {
     const ip = req.query.ip;
