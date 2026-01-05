@@ -1,6 +1,7 @@
 const express = require('express');
 const app = express();
-const fs = require('fs');
+const bcrypt = require('bcrypt');
+const jsonwebtoken = require('jsonwebtoken');
 
 const sqlDatabase = require("./util/mysql");
 const redisClient = require("./util/redis");
@@ -13,6 +14,8 @@ const startup = async () => {
 
         // Automaatne tabeli loomine
         await sqlDatabase.query("CREATE TABLE IF NOT EXISTS ips (id INT AUTO_INCREMENT PRIMARY KEY, ip VARBINARY(16) NOT NULL, is_tor BOOLEAN DEFAULT FALSE, is_host BOOLEAN DEFAULT FALSE, asn INT DEFAULT NULL, isp VARCHAR(255) DEFAULT NULL, country_code CHAR(2) DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        await sqlDatabase.query("CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        await sqlDatabase.query("CREATE TABLE IF NOT EXISTS api_keys (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, api_key VARCHAR(64) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id))");
 
         console.log("SQL database connection established!");
 
@@ -45,8 +48,17 @@ const startup = async () => {
 startup();
 
 app.get("/checkip", async (req, res) => {
+    if(req.headers['x-api-key']) {
+        const apiKey = req.headers['x-api-key'];
+        const a = await sqlDatabase.query("SELECT * FROM api_keys WHERE api_key = ?", [apiKey]);
+        if(a[0].length === 0) {
+            return res.status(403).json({error: "Invalid API key"});
+        }
+    } else {
+        return res.status(401).json({error: "API key required"});
+    }
+
     const ip = req.query.ip;
-    console.log(ip);
     if(!ip) {
         return res.status(400).json({error: "IP parameter is required"});
     }
@@ -112,12 +124,69 @@ app.get("/checkip", async (req, res) => {
     });
 });
 
-app.post("/login", (req, res) => {
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
 
+    jsonwebtoken.verify(token, "secret_key", (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+};
+
+app.post("/createapikey", authenticateToken, async (req, res) => {
+    const apiKey = require('crypto').randomBytes(32).toString('hex');
+    const userId = req.user.userId;
+    await sqlDatabase.query("INSERT INTO api_keys (user_id, api_key) VALUES (?, ?)", [userId, apiKey]);
+    return res.json({apiKey});
 });
 
-app.post("/register", (req, res) => {
+app.post("/login", async (req, res) => {
+    const {
+        email,
+        password
+    } = req.body;
 
+    if(!email || !password) {
+        return res.status(400).json({error: "Email and password are required"});
+    }
+
+    const user = await sqlDatabase.query("SELECT * FROM users WHERE email = ?", [email]);
+    if(user[0].length === 0) {
+        return res.status(400).json({error: "Invalid email or password"});
+    }
+
+    const validPassword = await bcrypt.compare(password, user[0][0].password_hash);
+    if(!validPassword) {
+        return res.status(400).json({error: "Invalid email or password"});
+    }
+
+    const token = jsonwebtoken.sign({userId: user[0][0].id}, "secret_key", {expiresIn: '1h'});
+    return res.json({token});
+});
+
+app.post("/register", async (req, res) => {
+    const {
+        email,
+        password
+    } = req.body;
+
+    if(!email || !password) {
+        return res.status(400).json({error: "Email and password are required"});
+    }
+
+    // Kontrollime, kas kasutaja on juba olemas
+    const existingUser = await sqlDatabase.query("SELECT * FROM users WHERE email = ?", [email]);
+    if(existingUser[0].length > 0) {
+        return res.status(400).json({error: "User already exists"});
+    }
+
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+    await sqlDatabase.query("INSERT INTO users (email, password_hash) VALUES (?, ?)", [email, passwordHash]);
+    return res.json({message: "User registered successfully"});
 });
 
 app.listen(3000, () => {
