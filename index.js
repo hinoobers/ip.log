@@ -7,6 +7,8 @@ const sqlDatabase = require("./util/mysql");
 const redisClient = require("./util/redis");
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('frontend'));
 
 const startup = async () => {
     try {
@@ -39,10 +41,9 @@ const startup = async () => {
     });
 
     // Salvesta andmebaasi
-    for(const node of torNodes) {
-        console.log(node);
-        await sqlDatabase.query("UPDATE ips SET is_tor = TRUE WHERE ip = INET6_ATON(?)", [node]);
-    }
+    // for(const node of torNodes) {
+    //     await sqlDatabase.query("UPDATE ips SET is_tor = TRUE WHERE ip = INET6_ATON(?)", [node]);
+    // }
     console.log("Tor nodes updated in database.");
 };
 startup();
