@@ -26,13 +26,18 @@ nav h1 {
     font-weight: 500;
 }
 
-nav a {
+nav div a {
     background: #ffffff;
     color: #000000;
     text-decoration: none;
     padding: 6px 14px;
     margin-left: 10px;
     font-size: 14px;
+}
+
+nav a {
+    text-decoration: none;
+    color: inherit;
 }
 
 main {
