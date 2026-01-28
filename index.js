@@ -107,6 +107,9 @@ app.get("/checkip", async (req, res) => {
                 delete data.id;
                 delete data.ip;
                 delete data.created_at;
+                if(!data.asn) {
+                    delete data.asn;
+                }
 
                 redisClient.set(ip, JSON.stringify(data), 'EX', 3600); // 1 hour expiration
                 return res.json({method: "mysql", data: data});
@@ -119,20 +122,35 @@ app.get("/checkip", async (req, res) => {
                         if(data.status !== "success") {
                             return res.status(500).json({error: "IP not found"});
                         } else {
-                            // Lisame enda andmebaasi
-                            await sqlDatabase.query("INSERT INTO ips (ip, is_host, asn, isp, country_code) VALUES (INET6_ATON(?), ?, ?, ?, ?)", [
-                                ip,
-                                data.hosting,
-                                data.as.split(" ")[0].replace("AS", ""),
-                                data.isp,
-                                data.countryCode
-                            ]);
-                            return res.json({method: "external", data: {
+                            
+                            if(data.as) {
+                                // Lisame enda andmebaasi
+                                await sqlDatabase.query("INSERT INTO ips (ip, is_host, asn, isp, country_code) VALUES (INET6_ATON(?), ?, ?, ?, ?)", [
+                                    ip,
+                                    data.hosting,
+                                    data.as.split(" ")[0].replace("AS", ""),
+                                    data.isp,
+                                    data.countryCode
+                                ]);
+                            } else {
+                                // ASNI pole
+                                await sqlDatabase.query("INSERT INTO ips (ip, is_host, isp, country_code) VALUES (INET6_ATON(?), ?, ?, ?)", [
+                                    ip,
+                                    data.hosting,
+                                    data.isp,
+                                    data.countryCode
+                                ]);
+                            }
+                            
+                            const json = JSON.stringify({
                                 is_host: data.hosting,
                                 asn: data.as.split(" ")[0].replace("AS", ""),
                                 isp: data.isp,
                                 country_code: data.countryCode
-                            }});
+                            }, (key, value) => {
+                              return (value === null || value === "") ? undefined : value;
+                            });
+                            return res.json({method: "external", data: JSON.parse(json)});
                         }
                     });
             }
